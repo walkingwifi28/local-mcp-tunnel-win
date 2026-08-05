@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -57,6 +57,14 @@ const defaultSettings: AppSettings = {
 const sourceLabels: Record<ProcessSource, string> = {
   tunnel: "tunnel-client",
   localMcp: "local-mcp",
+};
+
+const stateLabels: Record<ProcessState, string> = {
+  stopped: "Stopped",
+  starting: "Starting",
+  running: "Running",
+  stopping: "Stopping",
+  failed: "Failed",
 };
 
 function App() {
@@ -200,6 +208,14 @@ function App() {
     await run(() => invoke("send_process_input", { source: selectedLog, input: normalized }));
   }
 
+  async function copyLogs() {
+    try {
+      await navigator.clipboard.writeText(selectedLines.join("\n"));
+    } catch (reason) {
+      setError(toMessage(reason));
+    }
+  }
+
   async function sendPermission(action: string, directory?: string) {
     if (states.localMcp !== "running") {
       setError("Please start local-mcp first.");
@@ -265,20 +281,21 @@ function App() {
 
   return (
     <div className="app-shell">
-      <header className="titlebar">
-        <div>
-          <h1>Local MCP Tunnel</h1>
-          <p>Windows</p>
-        </div>
-        <button className="icon-button" onClick={() => setView(view === "main" ? "settings" : "main")}>
-          {view === "main" ? "Settings" : "Back"}
+      <header className="app-header">
+        <h1>{view === "main" ? "Local MCP Tunnel" : "Local MCP Tunnel Settings"}</h1>
+        <button
+          className="toolbar-button settings-button"
+          onClick={() => setView(view === "main" ? "settings" : "main")}
+        >
+          {view === "main" ? <GearIcon /> : <BackIcon />}
+          <span>{view === "main" ? "Settings" : "Back"}</span>
         </button>
       </header>
 
       {error && (
         <div className="error-banner">
           <span>{error}</span>
-          <button onClick={() => setError(null)}>×</button>
+          <button aria-label="Dismiss error" onClick={() => setError(null)}>×</button>
         </div>
       )}
 
@@ -292,47 +309,54 @@ function App() {
           saveMessage={saveMessage}
         />
       ) : (
-        <main className="main-grid">
-          <section className="control-column">
+        <main className="main-page">
+          <section className="process-grid">
             <ProcessCard
               title="Tunnel Client"
-              subtitle="Initialize and run the tunnel-client profile."
               state={states.tunnel}
-              primaryLabel="Start"
+              details={[
+                ["Profile", settings.profileName || "—"],
+                ["Tunnel ID", settings.tunnelId || "—"],
+              ]}
+              primaryLabel="Run"
               onPrimary={() => start("start_tunnel")}
               onSecondary={() => start("initialize_tunnel")}
-              secondaryLabel="Initialize"
+              secondaryLabel="Init"
               onStop={() => stop("tunnel")}
               busy={busy}
             />
 
             <ProcessCard
-              title="Local MCP"
-              subtitle="Start local-mcp and keep stdin connected."
+              title="local-mcp"
               state={states.localMcp}
+              details={[
+                ["Session", settings.sessionId || "—"],
+                ["Working Dir", settings.workingDirectory || "—"],
+              ]}
               primaryLabel="Start"
               onPrimary={() => start("start_local_mcp")}
               onStop={() => stop("localMcp")}
               busy={busy}
             />
-
-
           </section>
 
-          <section className="panel log-panel">
+          <section className="log-card">
             <div className="log-toolbar">
-              <div className="log-tabs">
-                {(["tunnel", "localMcp"] as ProcessSource[]).map((source) => (
-                  <button
-                    key={source}
-                    className={selectedLog === source ? "active" : ""}
-                    onClick={() => setSelectedLog(source)}
-                  >
-                    {sourceLabels[source]}
-                    <span className={`mini-dot ${states[source]}`} />
-                  </button>
-                ))}
+              <div className="log-toolbar-start">
+                <strong>Log</strong>
+                <div className="log-tabs" role="tablist" aria-label="Log source">
+                  {(["tunnel", "localMcp"] as ProcessSource[]).map((source) => (
+                    <button
+                      key={source}
+                      className={selectedLog === source ? "active" : ""}
+                      onClick={() => setSelectedLog(source)}
+                    >
+                      {sourceLabels[source]}
+                    </button>
+                  ))}
+                </div>
               </div>
+
               <div className="log-toolbar-actions">
                 {selectedLog === "localMcp" && (
                   <div className="inline-permissions">
@@ -391,8 +415,11 @@ function App() {
                     </button>
                   </div>
                 )}
+                <button className="toolbar-button compact-button" onClick={() => void copyLogs()}>
+                  Copy
+                </button>
                 <button
-                  className="clear-button"
+                  className="toolbar-button compact-button"
                   onClick={() => setLogs((previous) => ({ ...previous, [selectedLog]: [] }))}
                 >
                   Clear
@@ -402,7 +429,7 @@ function App() {
 
             <div className="terminal" ref={terminalRef}>
               {selectedLines.length === 0 ? (
-                <div className="terminal-empty">No log output yet.</div>
+                <div className="terminal-caret" aria-hidden="true" />
               ) : (
                 selectedLines.map((line, index) => <div key={`${index}-${line}`}>{line}</div>)
               )}
@@ -427,8 +454,8 @@ function App() {
 
 function ProcessCard(props: {
   title: string;
-  subtitle: string;
   state: ProcessState;
+  details: Array<[string, string]>;
   primaryLabel: string;
   secondaryLabel?: string;
   onPrimary: () => void;
@@ -438,16 +465,23 @@ function ProcessCard(props: {
 }) {
   const running = ["starting", "running", "stopping"].includes(props.state);
   return (
-    <section className="panel process-card">
-      <div className="process-copy">
-        <div className={`status-icon ${props.state}`} />
-        <div>
-          <h2>{props.title}</h2>
-          <p>{props.subtitle}</p>
+    <section className="process-section">
+      <h2>{props.title}</h2>
+      <div className="process-card">
+        <div className={`process-status ${props.state}`}>
+          <span className="status-dot" />
+          <strong>{stateLabels[props.state]}</strong>
         </div>
-      </div>
-      <div className="process-footer">
-        <StatePill state={props.state} />
+
+        <div className="process-details">
+          {props.details.map(([label, value]) => (
+            <div className="process-detail" key={label}>
+              <span>{label} :</span>
+              <strong title={value}>{value}</strong>
+            </div>
+          ))}
+        </div>
+
         <div className="button-row">
           {props.onSecondary && !running && (
             <button className="secondary-button" onClick={props.onSecondary} disabled={props.busy}>
@@ -469,17 +503,6 @@ function ProcessCard(props: {
   );
 }
 
-function StatePill({ state }: { state: ProcessState }) {
-  const labels: Record<ProcessState, string> = {
-    stopped: "Stopped",
-    starting: "Starting",
-    running: "Running",
-    stopping: "Stopping",
-    failed: "Failed",
-  };
-  return <span className={`state-pill ${state}`}>{labels[state]}</span>;
-}
-
 function SettingsView(props: {
   settings: AppSettings;
   setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
@@ -491,99 +514,96 @@ function SettingsView(props: {
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) =>
     props.setSettings((previous) => ({ ...previous, [key]: value }));
 
+  const deleteAllDirectories = () => update("allowedDirectories", []);
+
   return (
     <main className="settings-page">
-      <section className="panel settings-panel">
-        <div className="settings-heading">
-          <div>
-            <h2>Runtime</h2>
-            <p>WSL is used now. Native Windows remains available for future .exe builds.</p>
-          </div>
-          <div className="segmented runtime-segmented">
-            <button
-              className={props.settings.runtimeKind === "wsl" ? "active" : ""}
-              onClick={() => update("runtimeKind", "wsl")}
-            >
-              WSL
-            </button>
-            <button
-              className={props.settings.runtimeKind === "nativeWindows" ? "active" : ""}
-              onClick={() => update("runtimeKind", "nativeWindows")}
-            >
-              Native Windows
-            </button>
-          </div>
-        </div>
-
-        <div className="form-grid">
+      <div className="settings-content">
+        <SettingsSection title="Runtime Environment">
+          <SettingsRow label="Working Directory">
+            <div className="settings-row-control directory-control">
+              <input value={props.settings.workingDirectory} readOnly title={props.settings.workingDirectory} />
+              <button className="secondary-button select-button" onClick={() => void props.chooseDirectory("working")}>Select</button>
+            </div>
+          </SettingsRow>
+          <SettingsRow label="Runtime">
+            <div className="segmented runtime-segmented">
+              <button
+                className={props.settings.runtimeKind === "wsl" ? "active" : ""}
+                onClick={() => update("runtimeKind", "wsl")}
+              >
+                WSL
+              </button>
+              <button
+                className={props.settings.runtimeKind === "nativeWindows" ? "active" : ""}
+                onClick={() => update("runtimeKind", "nativeWindows")}
+              >
+                Native Windows
+              </button>
+            </div>
+          </SettingsRow>
           {props.settings.runtimeKind === "wsl" && (
-            <Field label="WSL Distribution" hint="Leave empty to use the default distribution.">
-              <input
+            <SettingsRow label="WSL Distribution">
+              <SettingsInput
                 value={props.settings.wslDistribution}
-                onChange={(event) => update("wslDistribution", event.target.value)}
-                placeholder="Ubuntu"
+                onChange={(value) => update("wslDistribution", value)}
+                placeholder="Default distribution"
               />
-            </Field>
+            </SettingsRow>
           )}
-          <Field label="Profile Name">
-            <input value={props.settings.profileName} onChange={(event) => update("profileName", event.target.value)} />
-          </Field>
-          <Field label="Tunnel ID">
-            <input value={props.settings.tunnelId} onChange={(event) => update("tunnelId", event.target.value)} />
-          </Field>
-          <Field label="Session ID">
-            <input value={props.settings.sessionId} onChange={(event) => update("sessionId", event.target.value)} />
-          </Field>
-          <Field label="Sample Name">
-            <input value={props.settings.sampleName} onChange={(event) => update("sampleName", event.target.value)} />
-          </Field>
-          <Field label="CONTROL_PLANE_API_KEY" hint="Stored in Windows Credential Manager, not settings.json.">
-            <input
+        </SettingsSection>
+
+        <SettingsSection title="Tunnel Client">
+          <SettingsRow label="Profile Name">
+            <SettingsInput value={props.settings.profileName} onChange={(value) => update("profileName", value)} />
+          </SettingsRow>
+          <SettingsRow label="Tunnel ID">
+            <SettingsInput value={props.settings.tunnelId} onChange={(value) => update("tunnelId", value)} />
+          </SettingsRow>
+          <SettingsRow label="Sample Name">
+            <SettingsInput value={props.settings.sampleName} onChange={(value) => update("sampleName", value)} />
+          </SettingsRow>
+          <SettingsRow label="tunnel-client">
+            <SettingsInput
+              value={props.settings.tunnelClientExecutable}
+              onChange={(value) => update("tunnelClientExecutable", value)}
+            />
+          </SettingsRow>
+          <SettingsRow label="CONTROL_PLANE_API_KEY">
+            <SettingsInput
               type="password"
               value={props.settings.controlPlaneApiKey}
-              onChange={(event) => update("controlPlaneApiKey", event.target.value)}
+              onChange={(value) => update("controlPlaneApiKey", value)}
             />
-          </Field>
-          <Field label="tunnel-client Executable">
-            <input
-              value={props.settings.tunnelClientExecutable}
-              onChange={(event) => update("tunnelClientExecutable", event.target.value)}
-            />
-          </Field>
-          <Field label="local-mcp Executable">
-            <input
-              value={props.settings.localMcpExecutable}
-              onChange={(event) => update("localMcpExecutable", event.target.value)}
-            />
-          </Field>
-          <Field label="MCP Command">
-            <input value={props.settings.mcpCommand} onChange={(event) => update("mcpCommand", event.target.value)} />
-          </Field>
-          <Field label="Working Directory" wide>
-            <div className="browse-row">
-              <input value={props.settings.workingDirectory} readOnly />
-              <button onClick={() => void props.chooseDirectory("working")}>Browse</button>
-            </div>
-          </Field>
-        </div>
-      </section>
+          </SettingsRow>
+        </SettingsSection>
 
-      <section className="panel settings-panel">
-        <div className="settings-heading">
-          <div>
-            <h2>Automatic Allow Directories</h2>
-            <p>These permissions are sent immediately after local-mcp starts.</p>
-          </div>
-          <button className="secondary-button" onClick={() => void props.chooseDirectory("allowed")}>Add Directories</button>
-        </div>
-        <div className="directory-list">
+        <SettingsSection title="local-mcp">
+          <SettingsRow label="Session ID">
+            <SettingsInput value={props.settings.sessionId} onChange={(value) => update("sessionId", value)} />
+          </SettingsRow>
+          <SettingsRow label="local-mcp">
+            <SettingsInput
+              value={props.settings.localMcpExecutable}
+              onChange={(value) => update("localMcpExecutable", value)}
+            />
+          </SettingsRow>
+          <SettingsRow label="MCP Command">
+            <SettingsInput value={props.settings.mcpCommand} onChange={(value) => update("mcpCommand", value)} />
+          </SettingsRow>
+        </SettingsSection>
+
+        <SettingsSection title="Auto-allow on startup" className="allow-section">
           {props.settings.allowedDirectories.length === 0 ? (
-            <p className="empty-list">No additional directories configured.</p>
+            <div className="empty-directory-row">No additional directories configured.</div>
           ) : (
             props.settings.allowedDirectories.map((directory) => (
-              <div className="directory-item" key={directory}>
-                <code>{directory}</code>
+              <div className="allow-directory-row" key={directory}>
+                <FolderIcon />
+                <span title={directory}>{directory}</span>
                 <button
+                  className="icon-only-button"
+                  aria-label={`Remove ${directory}`}
                   onClick={() =>
                     update(
                       "allowedDirectories",
@@ -591,31 +611,103 @@ function SettingsView(props: {
                     )
                   }
                 >
-                  Remove
+                  <TrashIcon />
                 </button>
               </div>
             ))
           )}
-        </div>
-      </section>
+          <div className="allow-actions">
+            <button className="secondary-button" onClick={() => void props.chooseDirectory("allowed")}>Add Directory…</button>
+            <button
+              className="secondary-button"
+              onClick={deleteAllDirectories}
+              disabled={props.settings.allowedDirectories.length === 0}
+            >
+              Delete All
+            </button>
+          </div>
+          <p className="settings-help">
+            Immediately after starting local-mcp, the app sends <code>/permission allow</code> to each registered directory.
+          </p>
+        </SettingsSection>
+      </div>
 
       <div className="settings-footer">
-        <span>{props.saveMessage}</span>
+        <span className="save-message">{props.saveMessage}</span>
         <button className="primary-button save-button" onClick={() => void props.save()} disabled={props.busy}>
-          Save Settings
+          Save
         </button>
       </div>
     </main>
   );
 }
 
-function Field(props: { label: string; hint?: string; wide?: boolean; children: React.ReactNode }) {
+function SettingsSection(props: { title: string; children: ReactNode; className?: string }) {
   return (
-    <label className={`field ${props.wide ? "wide" : ""}`}>
-      <span>{props.label}</span>
+    <section className={`settings-section ${props.className ?? ""}`}>
+      <h2>{props.title}</h2>
+      <div className="settings-group">{props.children}</div>
+    </section>
+  );
+}
+
+function SettingsRow(props: { label: string; children: ReactNode }) {
+  return (
+    <div className="settings-row">
+      <label>{props.label}</label>
       {props.children}
-      {props.hint && <small>{props.hint}</small>}
-    </label>
+    </div>
+  );
+}
+
+function SettingsInput(props: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: "text" | "password";
+}) {
+  return (
+    <input
+      className="settings-input"
+      type={props.type ?? "text"}
+      value={props.value}
+      placeholder={props.placeholder}
+      onChange={(event) => props.onChange(event.target.value)}
+      autoComplete="off"
+    />
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M9.7 3.4 10.2 2h3.6l.5 1.4c.5.2 1 .4 1.5.7l1.4-.6 2.5 2.5-.6 1.4c.3.5.5 1 .7 1.5l1.4.5V13l-1.4.5c-.2.5-.4 1-.7 1.5l.6 1.4-2.5 2.5-1.4-.6c-.5.3-1 .5-1.5.7l-.5 1.4h-3.6L9.7 19c-.5-.2-1-.4-1.5-.7l-1.4.6-2.5-2.5.6-1.4c-.3-.5-.5-1-.7-1.5L2.8 13V9.4l1.4-.5c.2-.5.4-1 .7-1.5L4.3 6l2.5-2.5 1.4.6c.5-.3 1-.5 1.5-.7Z" />
+      <circle cx="12" cy="11.2" r="3" />
+    </svg>
+  );
+}
+
+function BackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="m14.5 5-6 7 6 7" />
+    </svg>
+  );
+}
+
+function FolderIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 6.5h6l2 2h10v9.5H3z" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 7h14M9 7V4h6v3m-8 0 1 13h8l1-13M10 10v7m4-7v7" />
+    </svg>
   );
 }
 
