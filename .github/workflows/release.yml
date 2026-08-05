@@ -105,3 +105,26 @@ jobs:
             ${{ steps.package.outputs.installer }}
             ${{ steps.package.outputs.checksum }}
             ${{ steps.package.outputs.manifests }}
+
+      - name: Setup .NET for WingetCreate
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "6.0.x"
+
+      - name: Submit update to winget-pkgs
+        shell: pwsh
+        env:
+          WINGET_CREATE_GITHUB_TOKEN: ${{ secrets.WINGET_CREATE_GITHUB_TOKEN }}
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $installerUrl = "https://github.com/walkingwifi28/local-mcp-tunnel-win/releases/download/v$version/Local-MCP-Tunnel-$version-win-x64-setup.exe"
+
+          Invoke-WebRequest `
+            "https://aka.ms/wingetcreate/latest" `
+            -OutFile "wingetcreate.exe"
+
+          .\wingetcreate.exe update WalkingWiFi.LocalMCPTunnel `
+            -u $installerUrl `
+            -v $version `
+            -t $env:WINGET_CREATE_GITHUB_TOKEN `
+            --submit
