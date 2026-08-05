@@ -28,7 +28,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"],
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "shortDescription": "Windows controller for tunnel-client and local-mcp",
     "longDescription": "A Tauri desktop application that controls tunnel-client and local-mcp through WSL or native Windows executables.",
     "icon": [

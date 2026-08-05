@@ -1,0 +1,107 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.33.2"
+          run_install: false
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Set release version
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          ./scripts/set-version.ps1 -Version $version
+
+      - name: Validate frontend
+        run: pnpm build
+
+      - name: Validate Rust
+        shell: pwsh
+        run: |
+          Push-Location src-tauri
+          cargo fmt --check
+          cargo test
+          cargo clippy --all-targets -- -D warnings
+          Pop-Location
+
+      - name: Build NSIS installer
+        run: pnpm tauri build --bundles nsis
+
+      - name: Prepare release assets and winget manifests
+        id: package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $sourceInstaller = Get-ChildItem "src-tauri/target/release/bundle/nsis/*-setup.exe" | Select-Object -First 1
+          if ($null -eq $sourceInstaller) {
+            throw "NSIS installer was not found."
+          }
+
+          New-Item -ItemType Directory -Path artifacts -Force | Out-Null
+          $installerName = "Local-MCP-Tunnel-$version-win-x64-setup.exe"
+          $installerPath = Join-Path "artifacts" $installerName
+          Copy-Item $sourceInstaller.FullName $installerPath -Force
+
+          $hash = (Get-FileHash $installerPath -Algorithm SHA256).Hash.ToUpperInvariant()
+          $checksumPath = "$installerPath.sha256"
+          "$hash  $installerName" | Set-Content -NoNewline -Encoding ascii $checksumPath
+
+          ./scripts/generate-winget-manifests.ps1 `
+            -Version $version `
+            -InstallerSha256 $hash `
+            -Repository "walkingwifi28/local-mcp-tunnel-win" `
+            -InstallerName $installerName `
+            -OutputRoot "artifacts/manifests"
+
+          $manifestDirectory = "artifacts/manifests/w/WalkingWiFi/LocalMCPTunnel/$version"
+          $manifestArchive = "artifacts/WalkingWiFi.LocalMCPTunnel-$version-winget-manifests.zip"
+          Compress-Archive -Path "$manifestDirectory/*" -DestinationPath $manifestArchive -Force
+
+          "installer=$installerPath" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+          "manifests=$manifestArchive" >> $env:GITHUB_OUTPUT
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ${{ steps.package.outputs.installer }}
+            ${{ steps.package.outputs.checksum }}
+            ${{ steps.package.outputs.manifests }}

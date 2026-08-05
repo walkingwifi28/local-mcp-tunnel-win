@@ -1,0 +1,7 @@
+# コード署名方針
+
+GitHub Releasesおよびwingetから配布するWindowsインストーラーは、現時点ではコード署名証明書で署名していません。
+
+そのため、初回起動時やインストール時にWindows Defender SmartScreenの警告が表示される可能性があります。配布物の改ざん確認には、GitHub Releaseへ添付するSHA-256ファイルとwingetマニフェストの`InstallerSha256`を使用します。
+
+コード署名証明書を利用できるようになった場合は、GitHub ActionsのReleaseビルドへ署名処理を追加し、署名済みインストーラーへ移行します。

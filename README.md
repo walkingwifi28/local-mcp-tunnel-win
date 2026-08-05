@@ -4,6 +4,28 @@ RustとTauri 2で実装した、`tunnel-client`と`local-mcp`を操作するWind
 
 現時点ではWSL内のLinux版CLIを使用します。将来Windowsネイティブ版CLIが提供された場合に切り替えられるよう、Rustバックエンドを`CliRuntime`で抽象化しています。
 
+## インストール
+
+wingetからインストールします。
+
+```powershell
+winget install WalkingWiFi.LocalMCPTunnel
+```
+
+アップデート:
+
+```powershell
+winget upgrade WalkingWiFi.LocalMCPTunnel
+```
+
+アンインストール:
+
+```powershell
+winget uninstall WalkingWiFi.LocalMCPTunnel
+```
+
+wingetへの初回登録がMicrosoftの審査中の場合は、GitHub ReleasesのNSISインストーラーを使用してください。
+
 ## 構成
 
 - Tauri 2
@@ -37,15 +59,18 @@ src-tauri/src/runtime/
 - APIキーのWindows Credential Manager保存
 - 通常設定のJSON保存
 
-## 前提条件
+## 利用時の前提条件
 
 - Windows 10またはWindows 11
 - WSL2
 - WSL内に`local-mcp`と`tunnel-client`がインストール済み
+- Microsoft Edge WebView2 Runtime
+
+## 開発環境の前提条件
+
 - Node.js / pnpm
 - Rust MSVC toolchain
 - Visual Studio 2022 Build Tools
-- Microsoft Edge WebView2 Runtime
 
 Rustの確認:
 
@@ -77,6 +102,12 @@ cargo clippy --all-targets -- -D warnings
 cargo check
 ```
 
+wingetマニフェストの検証:
+
+```powershell
+winget validate manifests\w\WalkingWiFi\LocalMCPTunnel\<version>
+```
+
 ## Windowsインストーラー作成
 
 ```powershell
@@ -90,6 +121,55 @@ pnpm tauri build
 src-tauri/target/release/bundle/nsis/
 src-tauri/target/release/bundle/msi/
 ```
+
+## Releaseとwinget公開フロー
+
+`vX.Y.Z`形式のタグをpushすると、`.github/workflows/release.yml`が次の処理を実行します。
+
+1. Node.js、pnpm、Rustをセットアップ
+2. タグからアプリケーションバージョンを反映
+3. TypeScriptビルド、Rustテスト、rustfmt、Clippyを実行
+4. Windows x64向けNSISインストーラーを作成
+5. 配布ファイル名を`Local-MCP-Tunnel-X.Y.Z-win-x64-setup.exe`へ統一
+6. SHA-256ファイルを生成
+7. 実際のSHA-256を含むwinget分割マニフェストを生成
+8. インストーラー、SHA-256、wingetマニフェストZIPをGitHub Releaseへ添付
+
+公開:
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+生成されるReleaseファイル:
+
+```text
+Local-MCP-Tunnel-0.1.0-win-x64-setup.exe
+Local-MCP-Tunnel-0.1.0-win-x64-setup.exe.sha256
+WalkingWiFi.LocalMCPTunnel-0.1.0-winget-manifests.zip
+```
+
+初回登録では、Releaseで生成されたマニフェストをMicrosoftの`winget-pkgs`リポジトリへPull Requestとして提出します。Microsoftによる検証・審査・マージ後、`winget install WalkingWiFi.LocalMCPTunnel`が利用可能になります。
+
+以降のバージョンは、同じPackage Identifierの新しいバージョンとしてマニフェストを提出します。
+
+### ローカルでwingetマニフェストを生成
+
+```powershell
+$version = "0.1.0"
+$installer = "src-tauri\target\release\bundle\nsis\Local MCP Tunnel_0.1.0_x64-setup.exe"
+$sha256 = (Get-FileHash $installer -Algorithm SHA256).Hash
+
+.\scripts\generate-winget-manifests.ps1 `
+  -Version $version `
+  -InstallerSha256 $sha256 `
+  -Repository "walkingwifi28/local-mcp-tunnel-win"
+```
+
+### コード署名
+
+現在のインストーラーは未署名です。Windows Defender SmartScreenの警告が表示される可能性があります。詳細は[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md)を参照してください。
 
 ## 設定保存先
 
