@@ -55,20 +55,19 @@ impl CliRuntime for WslRuntime {
         if spec.executable.trim().is_empty() {
             return Err("Executable path is empty.".into());
         }
+        if spec.working_directory.trim().is_empty() {
+            return Err("Working directory is empty.".into());
+        }
 
         let working_directory = Self::windows_to_wsl_path(&spec.working_directory);
         let executable = Self::windows_to_wsl_path(&spec.executable);
 
-        // Values after the script are positional parameters, avoiding shell interpolation.
+        // Launch through WSL's direct --exec path. Arguments placed after `bash -lc`
+        // can be lost by wsl.exe, while --exec preserves argv and imported WSLENV values.
         let script = r#"
 set -e
-working_directory="$1"
-executable="$2"
-shift 2
-case "$working_directory" in
-  '$HOME'*) working_directory="$HOME${working_directory#'$HOME'}" ;;
-  '~/'*) working_directory="$HOME/${working_directory#~/}" ;;
-esac
+executable="$1"
+shift
 case "$executable" in
   '$HOME'*) executable="$HOME${executable#'$HOME'}" ;;
   '~/'*) executable="$HOME/${executable#~/}" ;;
@@ -81,19 +80,19 @@ for argument in "$@"; do
   esac
   expanded_arguments+=("$argument")
 done
-cd -- "$working_directory"
 printf '__LOCAL_MCP_TUNNEL_PID__:%s\n' "$$"
 exec "$executable" "${expanded_arguments[@]}"
 "#;
 
         let mut command = self.base_command();
         command
-            .arg("--")
+            .arg("--cd")
+            .arg(working_directory)
+            .arg("--exec")
             .arg("bash")
-            .arg("-lc")
+            .arg("-c")
             .arg(script)
             .arg("local-mcp-tunnel")
-            .arg(working_directory)
             .arg(executable)
             .args(&spec.arguments);
 
@@ -109,11 +108,12 @@ exec "$executable" "${expanded_arguments[@]}"
         if runtime_pid == 0 {
             return None;
         }
+
         let mut command = self.base_command();
         command
-            .arg("--")
+            .arg("--exec")
             .arg("bash")
-            .arg("-lc")
+            .arg("-c")
             .arg("kill -INT -- \"$1\" 2>/dev/null || kill -TERM -- \"$1\" 2>/dev/null || true")
             .arg("local-mcp-tunnel-stop")
             .arg(runtime_pid.to_string());
