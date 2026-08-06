@@ -90,44 +90,60 @@ function App() {
     let disposed = false;
     const unlisteners: Array<() => void> = [];
 
+    async function registerLogListener() {
+      const unlisten = await listen<LogEvent>("process-log", ({ payload }) => {
+        const label =
+          payload.stream === "system"
+            ? sourceLabels[payload.source]
+            : `${sourceLabels[payload.source]}:${payload.stream}`;
+        const line = `[${payload.timestamp}] [${label}] ${payload.line}`;
+        setLogs((previous) => ({
+          ...previous,
+          [payload.source]: [...previous[payload.source], line],
+        }));
+      });
+
+      if (disposed) {
+        unlisten();
+      } else {
+        unlisteners.push(unlisten);
+      }
+    }
+
+    async function registerStateListener() {
+      const unlisten = await listen<StateEvent>("process-state", ({ payload }) => {
+        setStates((previous) => ({ ...previous, [payload.source]: payload.state }));
+        if (
+          payload.source === "localMcp" &&
+          (payload.state === "stopped" || payload.state === "failed")
+        ) {
+          setRuntimeAllowedDirectories([]);
+        }
+        if (payload.error) setError(payload.error);
+      });
+
+      if (disposed) {
+        unlisten();
+      } else {
+        unlisteners.push(unlisten);
+      }
+    }
+
     async function initialize() {
       try {
-        const loaded = await invoke<AppSettings>("load_settings");
-        if (!disposed) setSettings(loaded);
+        await Promise.all([registerLogListener(), registerStateListener()]);
+        if (disposed) return;
 
-        const currentStates = await invoke<Record<ProcessSource, ProcessState>>("process_states");
-        if (!disposed) {
-          setStates((previous) => ({ ...previous, ...currentStates }));
-        }
+        const [loaded, currentStates] = await Promise.all([
+          invoke<AppSettings>("load_settings"),
+          invoke<Record<ProcessSource, ProcessState>>("process_states"),
+        ]);
+        if (disposed) return;
 
-        unlisteners.push(
-          await listen<LogEvent>("process-log", ({ payload }) => {
-            const label =
-              payload.stream === "system"
-                ? sourceLabels[payload.source]
-                : `${sourceLabels[payload.source]}:${payload.stream}`;
-            const line = `[${payload.timestamp}] [${label}] ${payload.line}`;
-            setLogs((previous) => ({
-              ...previous,
-              [payload.source]: [...previous[payload.source], line],
-            }));
-          }),
-        );
-
-        unlisteners.push(
-          await listen<StateEvent>("process-state", ({ payload }) => {
-            setStates((previous) => ({ ...previous, [payload.source]: payload.state }));
-            if (
-              payload.source === "localMcp" &&
-              (payload.state === "stopped" || payload.state === "failed")
-            ) {
-              setRuntimeAllowedDirectories([]);
-            }
-            if (payload.error) setError(payload.error);
-          }),
-        );
+        setSettings(loaded);
+        setStates((previous) => ({ ...previous, ...currentStates }));
       } catch (reason) {
-        setError(toMessage(reason));
+        if (!disposed) setError(toMessage(reason));
       }
     }
 
