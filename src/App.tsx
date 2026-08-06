@@ -2,6 +2,7 @@ import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "reac
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 type ProcessSource = "tunnel" | "localMcp";
@@ -54,6 +55,8 @@ const defaultSettings: AppSettings = {
   allowedDirectories: [],
   permissionMode: "ask",
 };
+
+const OPENAI_PLATFORM_URL = "https://platform.openai.com/";
 
 const sourceLabels: Record<ProcessSource, string> = {
   tunnel: "tunnel-client",
@@ -661,7 +664,20 @@ function SettingsView(props: {
           )}
         </SettingsSection>
 
-        <SettingsSection title="Tunnel Client">
+        <SettingsSection
+          title="Tunnel Client"
+          titleAction={
+            <button
+              type="button"
+              className="settings-section-link"
+              aria-label="Open OpenAI Platform in the browser"
+              title="Open OpenAI Platform"
+              onClick={() => void openUrl(OPENAI_PLATFORM_URL)}
+            >
+              <ExternalLinkIcon />
+            </button>
+          }
+        >
           <SettingsRow label="Profile Name">
             <SettingsInput value={props.settings.profileName} onChange={(value) => update("profileName", value)} />
           </SettingsRow>
@@ -779,10 +795,18 @@ function SettingsView(props: {
   );
 }
 
-function SettingsSection(props: { title: string; children: ReactNode; className?: string }) {
+function SettingsSection(props: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+  titleAction?: ReactNode;
+}) {
   return (
     <section className={`settings-section ${props.className ?? ""}`}>
-      <h2>{props.title}</h2>
+      <div className="settings-section-header">
+        <h2>{props.title}</h2>
+        {props.titleAction}
+      </div>
       <div className="settings-group">{props.children}</div>
     </section>
   );
@@ -812,6 +836,15 @@ function SettingsInput(props: {
       onChange={(event) => props.onChange(event.target.value)}
       autoComplete="off"
     />
+  );
+}
+
+function ExternalLinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M14 5h5v5M19 5l-8 8" />
+      <path d="M19 13v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+    </svg>
   );
 }
 
