@@ -7,6 +7,7 @@ import "./App.css";
 type ProcessSource = "tunnel" | "localMcp";
 type ProcessState = "stopped" | "starting" | "running" | "stopping" | "failed";
 type RuntimeKind = "wsl" | "nativeWindows";
+type SaveButtonState = "idle" | "saving" | "success" | "failure";
 
 type AppSettings = {
   runtimeKind: RuntimeKind;
@@ -83,8 +84,21 @@ function App() {
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveButtonState, setSaveButtonState] = useState<SaveButtonState>("idle");
   const [busy, setBusy] = useState(false);
+  const [revokeMenuOpen, setRevokeMenuOpen] = useState(false);
   const terminalRef = useRef<HTMLDivElement>(null);
+  const revokeMenuRef = useRef<HTMLDivElement>(null);
+  const saveResetTimerRef = useRef<number | null>(null);
+
+  const revokeDirectories = useMemo(
+    () =>
+      runtimeAllowedDirectories
+        .filter((directory) => directory !== settings.workingDirectory)
+        .sort((left, right) => left.localeCompare(right)),
+    [runtimeAllowedDirectories, settings.workingDirectory],
+  );
+  const revokeDisabled = states.localMcp !== "running" || revokeDirectories.length === 0;
 
   useEffect(() => {
     let disposed = false;
@@ -159,6 +173,38 @@ function App() {
     if (terminal) terminal.scrollTop = terminal.scrollHeight;
   }, [logs, selectedLog]);
 
+  useEffect(() => {
+    return () => {
+      if (saveResetTimerRef.current !== null) {
+        window.clearTimeout(saveResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!revokeMenuOpen) return;
+
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!revokeMenuRef.current?.contains(event.target as Node)) {
+        setRevokeMenuOpen(false);
+      }
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRevokeMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [revokeMenuOpen]);
+
+  useEffect(() => {
+    if (revokeDisabled) setRevokeMenuOpen(false);
+  }, [revokeDisabled]);
+
   const selectedLines = logs[selectedLog];
   const selectedState = states[selectedLog];
   const canSend = selectedState === "running";
@@ -185,11 +231,49 @@ function App() {
   }
 
   async function save() {
-    await run(async () => {
+    if (saveButtonState === "saving") return;
+
+    if (saveResetTimerRef.current !== null) {
+      window.clearTimeout(saveResetTimerRef.current);
+      saveResetTimerRef.current = null;
+    }
+
+    setError(null);
+    setSaveMessage(null);
+    setSaveButtonState("saving");
+
+    const startedAt = performance.now();
+    let didSave = false;
+    let failure: unknown = null;
+
+    try {
       await invoke("save_settings", { settings });
+      didSave = true;
+    } catch (reason) {
+      failure = reason;
+    }
+
+    const remainingLoadingTime = Math.max(0, 500 - (performance.now() - startedAt));
+    if (remainingLoadingTime > 0) {
+      await new Promise<void>((resolve) => {
+        window.setTimeout(resolve, remainingLoadingTime);
+      });
+    }
+
+    if (didSave) {
+      setSaveButtonState("success");
       setSaveMessage("Settings have been saved.");
-      window.setTimeout(() => setSaveMessage(null), 3000);
-    });
+    } else {
+      const message = toMessage(failure);
+      setSaveButtonState("failure");
+      setSaveMessage(message);
+    }
+
+    saveResetTimerRef.current = window.setTimeout(() => {
+      setSaveButtonState("idle");
+      setSaveMessage(null);
+      saveResetTimerRef.current = null;
+    }, 3000);
   }
 
   async function start(command: "initialize_tunnel" | "start_tunnel" | "start_local_mcp") {
@@ -321,7 +405,7 @@ function App() {
           setSettings={setSettings}
           chooseDirectory={chooseDirectory}
           save={save}
-          busy={busy}
+          saveButtonState={saveButtonState}
           saveMessage={saveMessage}
         />
       ) : (
@@ -398,31 +482,39 @@ function App() {
                     >
                       Allow…
                     </button>
-                    <select
-                      aria-label="Revoke directory"
-                      defaultValue=""
-                      disabled={
-                        states.localMcp !== "running" ||
-                        runtimeAllowedDirectories.filter(
-                          (directory) => directory !== settings.workingDirectory,
-                        ).length === 0
-                      }
-                      onChange={(event) => {
-                        const directory = event.target.value;
-                        event.target.value = "";
-                        if (directory) void sendPermission("revoke", directory);
-                      }}
-                    >
-                      <option value="">Revoke</option>
-                      {runtimeAllowedDirectories
-                        .filter((directory) => directory !== settings.workingDirectory)
-                        .sort((left, right) => left.localeCompare(right))
-                        .map((directory) => (
-                          <option key={directory} value={directory}>
-                            {directory}
-                          </option>
-                        ))}
-                    </select>
+                    <div className="revoke-dropdown" ref={revokeMenuRef}>
+                      <button
+                        type="button"
+                        className="revoke-trigger"
+                        aria-label="Revoke directory"
+                        aria-haspopup="menu"
+                        aria-expanded={revokeMenuOpen}
+                        disabled={revokeDisabled}
+                        onClick={() => setRevokeMenuOpen((open) => !open)}
+                      >
+                        <span>Revoke</span>
+                        <ChevronDownIcon />
+                      </button>
+                      {revokeMenuOpen && (
+                        <div className="revoke-menu" role="menu">
+                          {revokeDirectories.map((directory) => (
+                            <button
+                              type="button"
+                              role="menuitem"
+                              className="revoke-menu-item"
+                              key={directory}
+                              title={directory}
+                              onClick={() => {
+                                setRevokeMenuOpen(false);
+                                void sendPermission("revoke", directory);
+                              }}
+                            >
+                              {directory}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <button onClick={() => void sendPermission("list")} disabled={states.localMcp !== "running"}>
                       List
                     </button>
@@ -524,7 +616,7 @@ function SettingsView(props: {
   setSettings: React.Dispatch<React.SetStateAction<AppSettings>>;
   chooseDirectory: (target: "working" | "allowed") => Promise<void>;
   save: () => Promise<void>;
-  busy: boolean;
+  saveButtonState: SaveButtonState;
   saveMessage: string | null;
 }) {
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) =>
@@ -649,9 +741,38 @@ function SettingsView(props: {
       </div>
 
       <div className="settings-footer">
-        <span className="save-message">{props.saveMessage}</span>
-        <button className="primary-button save-button" onClick={() => void props.save()} disabled={props.busy}>
-          Save
+        <span className={`save-message ${props.saveButtonState === "failure" ? "failure" : ""}`}>
+          {props.saveMessage}
+        </span>
+        <button
+          className={`primary-button save-button ${props.saveButtonState}`}
+          onClick={() => void props.save()}
+          disabled={props.saveButtonState === "saving"}
+          aria-label={
+            props.saveButtonState === "idle"
+              ? "Save settings"
+              : props.saveButtonState === "saving"
+                ? "Saving settings"
+                : props.saveButtonState === "success"
+                  ? "Settings saved"
+                  : "Failed to save settings. Retry"
+          }
+        >
+          <span className={`save-button-face ${props.saveButtonState === "idle" ? "active" : ""}`}>
+            Save
+          </span>
+          <span className={`save-button-face ${props.saveButtonState === "saving" ? "active" : ""}`}>
+            <span className="save-spinner" aria-hidden="true" />
+            Saving...
+          </span>
+          <span className={`save-button-face ${props.saveButtonState === "success" ? "active" : ""}`}>
+            <SaveCheckIcon />
+            Saved
+          </span>
+          <span className={`save-button-face ${props.saveButtonState === "failure" ? "active" : ""}`}>
+            <SaveErrorIcon />
+            Retry
+          </span>
         </button>
       </div>
     </main>
@@ -691,6 +812,30 @@ function SettingsInput(props: {
       onChange={(event) => props.onChange(event.target.value)}
       autoComplete="off"
     />
+  );
+}
+
+function SaveCheckIcon() {
+  return (
+    <svg className="save-state-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="m3.5 8.2 2.8 2.8 6.2-6.2" />
+    </svg>
+  );
+}
+
+function SaveErrorIcon() {
+  return (
+    <svg className="save-state-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 3.2v5.4M8 11.8v.2" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="m4 6 4 4 4-4" />
+    </svg>
   );
 }
 
