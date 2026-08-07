@@ -2,7 +2,7 @@ mod process_manager;
 mod runtime;
 mod settings;
 
-use process_manager::{emit_log, ProcessRegistry, ProcessSource};
+use process_manager::{emit_log, ProcessRegistry, ProcessSource, RestartPolicy};
 use runtime::{runtime_for, CommandSpec, RuntimeOptions};
 use settings::AppSettings;
 use std::collections::HashMap;
@@ -70,7 +70,13 @@ async fn initialize_tunnel(
     };
     state
         .processes
-        .start(app, ProcessSource::Tunnel, spec, runtime_options(&settings))
+        .start(
+            app,
+            ProcessSource::Tunnel,
+            spec,
+            runtime_options(&settings),
+            RestartPolicy::disabled(),
+        )
         .await
 }
 
@@ -93,7 +99,13 @@ async fn start_tunnel(
     };
     state
         .processes
-        .start(app, ProcessSource::Tunnel, spec, runtime_options(&settings))
+        .start(
+            app,
+            ProcessSource::Tunnel,
+            spec,
+            runtime_options(&settings),
+            RestartPolicy::tunnel(),
+        )
         .await
 }
 
@@ -114,7 +126,13 @@ async fn start_local_mcp(
 
     state
         .processes
-        .start(app.clone(), ProcessSource::LocalMcp, spec, options.clone())
+        .start(
+            app.clone(),
+            ProcessSource::LocalMcp,
+            spec,
+            options.clone(),
+            RestartPolicy::disabled(),
+        )
         .await?;
 
     let permission = if settings.permission_mode == "yolo" {
