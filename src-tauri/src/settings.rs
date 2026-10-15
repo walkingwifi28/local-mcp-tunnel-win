@@ -59,6 +59,30 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub fn tunnel_mcp_command(&self) -> String {
+        if self.runtime_kind != RuntimeKind::NativeWindows {
+            return self.mcp_command.clone();
+        }
+
+        // tunnel-client parses this string using shell quoting, which consumes
+        // Windows path backslashes. Normalize only the executable, not its args.
+        let command = self.mcp_command.trim_start();
+        let leading_length = self.mcp_command.len() - command.len();
+        let executable_end = match command.chars().next() {
+            Some(quote @ ('"' | '\'')) => command[1..]
+                .find(quote)
+                .map(|end| end + 2)
+                .unwrap_or(command.len()),
+            _ => command.find(char::is_whitespace).unwrap_or(command.len()),
+        };
+        format!(
+            "{}{}{}",
+            &self.mcp_command[..leading_length],
+            command[..executable_end].replace('\\', "/"),
+            &command[executable_end..]
+        )
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.profile_name.trim().is_empty() {
             return Err("Please enter a Profile Name.".into());
@@ -227,4 +251,41 @@ fn default_working_directory() -> String {
 
 fn default_permission_mode() -> String {
     "ask".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_mcp_command_accepts_both_path_separators() {
+        let mut settings = AppSettings::default();
+        settings.runtime_kind = RuntimeKind::NativeWindows;
+        for input in [r"C:\tools\local-mcp.exe mcp", "C:/tools/local-mcp.exe mcp"] {
+            settings.mcp_command = input.into();
+            assert_eq!(settings.tunnel_mcp_command(), "C:/tools/local-mcp.exe mcp");
+            assert_eq!(settings.mcp_command, input);
+        }
+    }
+
+    #[test]
+    fn native_mcp_command_preserves_quotes_and_arguments() {
+        let mut settings = AppSettings::default();
+        settings.runtime_kind = RuntimeKind::NativeWindows;
+        for quote in ['\"', '\''] {
+            settings.mcp_command =
+                format!(r#"  {quote}C:\Program Files\local-mcp.exe{quote} mcp --value 'a\b'"#);
+            assert_eq!(
+                settings.tunnel_mcp_command(),
+                format!(r#"  {quote}C:/Program Files/local-mcp.exe{quote} mcp --value 'a\b'"#)
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_mcp_command_is_unchanged() {
+        let mut settings = AppSettings::default();
+        settings.mcp_command = r"/home/user/local-mcp mcp --value a\b".into();
+        assert_eq!(settings.tunnel_mcp_command(), settings.mcp_command);
+    }
 }

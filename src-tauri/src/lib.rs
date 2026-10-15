@@ -62,7 +62,7 @@ async fn initialize_tunnel(
             "--tunnel-id".into(),
             settings.tunnel_id.clone(),
             "--mcp-command".into(),
-            settings.mcp_command.clone(),
+            settings.tunnel_mcp_command(),
             "--force".into(),
         ],
         environment: environment(&settings),
